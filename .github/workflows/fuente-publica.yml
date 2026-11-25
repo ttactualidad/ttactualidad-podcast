@@ -1,0 +1,35 @@
+name: Diagnóstico de fuente pública del podcast
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/fuente-publica.yml']
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Inspeccionar únicamente RSS y una ficha pública
+        run: |
+          python - <<'PY'
+          import urllib.request,xml.etree.ElementTree as ET, re
+          from urllib.parse import urlsplit
+          base='https://ttactualidad.rainyraven22.chatgpt.site'
+          def get(url):
+              req=urllib.request.Request(url,headers={'User-Agent':'TTActualidad-Podcast-Piloto/1.0'})
+              with urllib.request.urlopen(req,timeout=20) as res:
+                  return res.read(1500000).decode('utf-8','replace'),res.getheader('Content-Type')
+          rss,kind=get(base+'/rss/tendencias.xml')
+          root=ET.fromstring(rss)
+          item=root.find('./channel/item')
+          if item is None: raise SystemExit('RSS sin entradas')
+          print('RSS_FIELDS',[(x.tag,len(x.text or '')) for x in item])
+          link=item.findtext('link','')
+          if urlsplit(link).netloc!=urlsplit(base).netloc or not re.fullmatch(r'/tendencias/trv2-[a-f0-9]{24}',urlsplit(link).path):
+              raise SystemExit('Ficha no reconocida')
+          page,kind=get(link)
+          print('PAGE_CONTENT_TYPE',kind,'LENGTH',len(page))
+          print('PUBLIC_PAGE_SAMPLE',page[:16000])
+          PY
