@@ -1,0 +1,95 @@
+name: TTActualidad - prueba de voz (5 tendencias)
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/piloto.yml']
+permissions:
+  contents: read
+concurrency:
+  group: piloto
+  cancel-in-progress: false
+jobs:
+  audio:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Leer unicamente RSS publico
+        run: |
+          mkdir -p piloto
+          python - <<'PY'
+          import hashlib, json, re, urllib.request, xml.etree.ElementTree as ET
+          from html.parser import HTMLParser
+          from pathlib import Path
+          URL='https://ttactualidad.rainyraven22.chatgpt.site/rss/tendencias.xml'
+          class Cleaner(HTMLParser):
+              def __init__(self):
+                  super().__init__(convert_charrefs=True); self.parts=[]; self.hidden=0
+              def handle_starttag(self,tag,attrs):
+                  if tag in ('script','style'): self.hidden+=1
+                  if tag in ('p','div','br','li','h1','h2','h3'): self.parts.append(' ')
+              def handle_endtag(self,tag):
+                  if tag in ('script','style'): self.hidden=max(0,self.hidden-1)
+                  if tag in ('p','div','li','h1','h2','h3'): self.parts.append(' ')
+              def handle_data(self,data):
+                  if not self.hidden: self.parts.append(data)
+          def clean(value):
+              p=Cleaner(); p.feed(value or ''); p.close()
+              return re.sub(r'\s+',' ',re.sub(r'https?://\S+','',''.join(p.parts))).strip()
+          req=urllib.request.Request(URL,headers={'User-Agent':'TTActualidad-Podcast-Piloto/1.0','Accept':'application/rss+xml, application/xml, text/xml'})
+          with urllib.request.urlopen(req,timeout=35) as response:
+              data=response.read(2000001)
+          if len(data)>2000000: raise SystemExit('RSS demasiado grande')
+          root=ET.fromstring(data)
+          if root.tag!='rss': raise SystemExit('RSS invalido')
+          items=[]; seen=set()
+          for entry in root.findall('./channel/item'):
+              title=clean(entry.findtext('title',''))
+              body=clean(entry.findtext('{http://purl.org/rss/1.0/modules/content/}encoded','')) or clean(entry.findtext('description',''))
+              guid=entry.findtext('guid') or entry.findtext('link') or title
+              if not title or len(body)<40 or len(body)>10000 or guid in seen: continue
+              seen.add(guid)
+              spoken=body if body.casefold().startswith(title.casefold()) else title.rstrip('. ')+'. '+body
+              items.append({'title':title,'text':spoken,'audio':f'{len(items)+1:02d}-'+hashlib.sha256(guid.encode()).hexdigest()[:12]+'.mp3','guid':guid,'date':entry.findtext('pubDate',''),'link':entry.findtext('link','')})
+              if len(items)==5: break
+          if len(items)!=5: raise SystemExit(f'Solo {len(items)} entradas validas; se requieren cinco')
+          Path('piloto/manifest.json').write_text(json.dumps(items,ensure_ascii=False,indent=2),encoding='utf-8')
+          print('RSS_VALIDO: 5 tendencias')
+          PY
+      - name: Instalar Piper y voz castellana
+        run: |
+          python -m pip install --disable-pip-version-check piper-tts==1.8.0
+          python -m piper.download_voices es_ES-davefx-medium
+      - name: Generar y comprobar cinco MP3
+        run: |
+          python - <<'PY'
+          import html,json,subprocess,tempfile
+          from pathlib import Path
+          output=Path('piloto')
+          items=json.loads((output/'manifest.json').read_text(encoding='utf-8'))
+          cards=[]
+          with tempfile.TemporaryDirectory() as temp:
+              wav=Path(temp)/'voice.wav'
+              for entry in items:
+                  subprocess.run(['python','-m','piper','-m','es_ES-davefx-medium.onnx','-f',str(wav)],input=entry['text']+'\n',text=True,check=True,timeout=120)
+                  dest=output/entry['audio']
+                  subprocess.run(['ffmpeg','-hide_banner','-loglevel','error','-y','-i',str(wav),'-ac','1','-codec:a','libmp3lame','-b:a','48k',str(dest)],check=True,timeout=60)
+                  duration=float(subprocess.check_output(['ffprobe','-v','error','-show_entries','format=duration','-of','default=noprint_wrappers=1:nokey=1',str(dest)],text=True))
+                  if duration<=0 or dest.stat().st_size<1024: raise RuntimeError('Audio no valido')
+                  entry.update(seconds=round(duration,2),bytes=dest.stat().st_size)
+                  cards.append(f'<article><h2>{html.escape(entry["title"])}</h2><p>{entry["seconds"]:.1f} segundos</p><audio controls preload="none" src="{entry["audio"]}"></audio><details><summary>Texto leído</summary><p>{html.escape(entry["text"])}</p></details></article>')
+                  print('EPISODIO_OK:',entry['title'],entry['seconds'],entry['bytes'])
+          (output/'manifest.json').write_text(json.dumps(items,ensure_ascii=False,indent=2),encoding='utf-8')
+          (output/'index.html').write_text('<!doctype html><html lang="es"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>TTActualidad · prueba de voz</title><style>body{max-width:700px;margin:2rem auto;padding:0 1rem;font:16px system-ui}article{border-top:1px solid #ccc;padding:1rem 0}audio{width:100%}</style><h1>TTActualidad · Tendencias en audio</h1><p>Prueba puntual con Piper. Sin publicación de podcast.</p>'+''.join(cards),encoding='utf-8')
+          print(f'PILOTO_OK: {len(items)} MP3; {sum(x["bytes"] for x in items)} bytes')
+          PY
+      - name: Guardar muestra siete dias
+        uses: actions/upload-artifact@v4
+        with:
+          name: TTActualidad-tendencias-piloto
+          path: piloto/
+          retention-days: 7
+          if-no-files-found: error
