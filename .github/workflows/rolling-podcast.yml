@@ -15,6 +15,7 @@ jobs:
     timeout-minutes: 10
     outputs:
       changed: ${{ steps.build.outputs.changed }}
+      digest: ${{ steps.build.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -24,13 +25,20 @@ jobs:
           python-version: '3.12'
       - name: Pruebas de privacidad y caducidad
         run: python -m unittest -v test_rolling_podcast.py
+      - name: Comprobar novedades y caducidad
+        id: plan
+        run: |
+          python rolling_podcast.py --plan
+          echo "changed=$(cat changed.txt)" >> "$GITHUB_OUTPUT"
       - uses: actions/cache/restore@v4
+        if: steps.plan.outputs.changed == 'yes'
         with:
           path: audio-cache
           key: podcast-audio-v1-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: |
             podcast-audio-v1-
       - name: Preparar motor local y codificador
+        if: steps.plan.outputs.changed == 'yes'
         run: |
           if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
             sudo apt-get update -qq
@@ -41,10 +49,11 @@ jobs:
       - name: Construir actualización sin duplicados
         id: build
         run: |
-          python rolling_podcast.py
+          python rolling_podcast.py --generate
           echo "changed=$(cat changed.txt)" >> "$GITHUB_OUTPUT"
           if [ "$(cat changed.txt)" = yes ]; then
             python build_podcast.py --source rolling --output site --base https://ttactualidad.github.io/ttactualidad-podcast/
+            echo "digest=$(sha256sum site/feed.xml | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
           fi
       - name: Conservar caché de audios solo si cambia el podcast
         if: steps.build.outputs.changed == 'yes'
@@ -76,16 +85,19 @@ jobs:
       - name: Validar RSS público y audios
         env:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+          EXPECTED_SHA: ${{ needs.build.outputs.digest }}
         run: |
           python - <<'PY'
-          import time,os,urllib.request,xml.etree.ElementTree as ET
+          import time,os,hashlib,urllib.request,xml.etree.ElementTree as ET
           from datetime import datetime,timezone,timedelta
           from email.utils import parsedate_to_datetime
           base=os.environ['PAGE_URL'].rstrip('/')+'/'
           for attempt in range(6):
               try:
                   with urllib.request.urlopen(base+'feed.xml',timeout=15) as r:
-                      feed=ET.fromstring(r.read(2000000))
+                      raw=r.read(2000000)
+                  assert hashlib.sha256(raw).hexdigest()==os.environ['EXPECTED_SHA'], 'RSS anterior o incompleto'
+                  feed=ET.fromstring(raw)
                   items=feed.findall('./channel/item')
                   assert 1<=len(items)<=420
                   assert len({x.findtext('guid') for x in items})==len(items)
