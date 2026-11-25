@@ -41,12 +41,12 @@ jobs:
           retention-days: 7
           if-no-files-found: error
       - name: Preparar publicación Pages
-        if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'Publicar piloto Pages en organizacion TTActualidad')
+        if: false # Pilot publication retired; rolling-podcast.yml owns the feed
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
   deploy:
-    if: github.event_name == 'workflow_dispatch' || (github.event_name == 'push' && github.event.head_commit.message == 'Publicar piloto Pages en organizacion TTActualidad')
+    if: false # Pilot publication retired; rolling-podcast.yml owns the feed
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 5
