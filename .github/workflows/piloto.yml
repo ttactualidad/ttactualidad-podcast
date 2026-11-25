@@ -59,6 +59,14 @@ jobs:
           Path('piloto/manifest.json').write_text(json.dumps(items,ensure_ascii=False,indent=2),encoding='utf-8')
           print('RSS_VALIDO: 5 tendencias')
           PY
+      - name: Instalar codificador MP3 y verificador
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          ffmpeg -version | head -n 1
+          ffprobe -version | head -n 1
       - name: Instalar Piper y voz castellana
         run: |
           python -m pip install --disable-pip-version-check piper-tts==1.8.0
