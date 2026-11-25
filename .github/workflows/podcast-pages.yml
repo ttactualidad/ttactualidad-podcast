@@ -1,0 +1,91 @@
+name: TTActualidad - podcast piloto en GitHub Pages
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/podcast-pages.yml','build_podcast.py']
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: ttactualidad-podcast-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Recuperar cinco MP3 del piloto verificado
+        uses: actions/download-artifact@v4
+        with:
+          name: TTActualidad-tendencias-piloto
+          run-id: 45632270781
+          github-token: ${{ github.token }}
+          path: piloto
+      - name: Instalar verificador de audio
+        run: |
+          if ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+      - name: Validar RSS y preparar web sin audios en Git
+        run: python build_podcast.py --source piloto --output site --base https://fabricelop.github.io/ttactualidad-podcast/
+      - name: Guardar paquete de prueba
+        uses: actions/upload-artifact@v4
+        with:
+          name: podcast-estatico-verificado
+          path: site/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Preparar publicación Pages
+        if: github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Publicar solo sitio estático de podcast
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verificar RSS y respuestas MP3 públicas
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          python - <<'PY'
+          import time,os,urllib.request,xml.etree.ElementTree as ET
+          base=os.environ['PAGE_URL'].rstrip('/')+'/'
+          for attempt in range(8):
+              try:
+                  with urllib.request.urlopen(base+'feed.xml',timeout=15) as r:
+                      feed=ET.fromstring(r.read(2000000))
+                  items=feed.findall('./channel/item')
+                  if len(items)!=5: raise ValueError('Expected five episodes')
+                  for item in items:
+                      e=item.find('enclosure')
+                      assert e.get('url').startswith(base+'audio/')
+                      with urllib.request.urlopen(urllib.request.Request(e.get('url'),method='HEAD'),timeout=15) as r:
+                          assert r.status==200 and int(r.headers['Content-Length'])==int(e.get('length'))
+                      req=urllib.request.Request(e.get('url'),headers={'Range':'bytes=0-1023'})
+                      with urllib.request.urlopen(req,timeout=15) as r:
+                          assert r.status==206 and r.headers.get('Content-Range','').startswith('bytes 0-1023/')
+                          assert len(r.read(2048))==1024
+                  print('PODCAST_PUBLIC_OK',base+'feed.xml')
+                  break
+              except Exception as exc:
+                  if attempt==7: raise
+                  print('Waiting for Pages propagation',type(exc).__name__)
+                  time.sleep(5)
+          PY
