@@ -1,0 +1,106 @@
+name: TTActualidad - actualización de podcast
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ['.github/workflows/rolling-podcast.yml','rolling_podcast.py','test_rolling_podcast.py']
+permissions:
+  contents: read
+concurrency:
+  group: ttactualidad-podcast-pages
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      changed: ${{ steps.build.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Pruebas de privacidad y caducidad
+        run: python -m unittest -v test_rolling_podcast.py
+      - uses: actions/cache/restore@v4
+        with:
+          path: audio-cache
+          key: podcast-audio-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: |
+            podcast-audio-v1-
+      - name: Preparar motor local y codificador
+        run: |
+          if ! command -v ffmpeg >/dev/null || ! command -v ffprobe >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y --no-install-recommends ffmpeg
+          fi
+          python -m pip install --disable-pip-version-check piper-tts==1.8.0
+          python -m piper.download_voices es_ES-davefx-medium
+      - name: Construir actualización sin duplicados
+        id: build
+        run: |
+          python rolling_podcast.py
+          echo "changed=$(cat changed.txt)" >> "$GITHUB_OUTPUT"
+          if [ "$(cat changed.txt)" = yes ]; then
+            python build_podcast.py --source rolling --output site --base https://ttactualidad.github.io/ttactualidad-podcast/
+          fi
+      - name: Conservar caché de audios solo si cambia el podcast
+        if: steps.build.outputs.changed == 'yes'
+        uses: actions/cache/save@v4
+        with:
+          path: audio-cache
+          key: podcast-audio-v1-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Preparar publicación de cambios
+        if: steps.build.outputs.changed == 'yes' && github.event_name == 'workflow_dispatch'
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+          retention-days: 1
+  deploy:
+    needs: build
+    if: needs.build.outputs.changed == 'yes' && github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Actualizar únicamente podcast público
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Validar RSS público y audios
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          python - <<'PY'
+          import time,os,urllib.request,xml.etree.ElementTree as ET
+          from datetime import datetime,timezone,timedelta
+          from email.utils import parsedate_to_datetime
+          base=os.environ['PAGE_URL'].rstrip('/')+'/'
+          for attempt in range(6):
+              try:
+                  with urllib.request.urlopen(base+'feed.xml',timeout=15) as r:
+                      feed=ET.fromstring(r.read(2000000))
+                  items=feed.findall('./channel/item')
+                  assert 1<=len(items)<=420
+                  assert len({x.findtext('guid') for x in items})==len(items)
+                  for item in items:
+                      assert parsedate_to_datetime(item.findtext('pubDate'))>=datetime.now(timezone.utc)-timedelta(days=7,minutes=5)
+                      e=item.find('enclosure')
+                      assert e.get('url').startswith(base+'audio/')
+                  for item in items[:3]:
+                      e=item.find('enclosure')
+                      with urllib.request.urlopen(urllib.request.Request(e.get('url'),headers={'Range':'bytes=0-1023'}),timeout=15) as r:
+                          assert r.status==206 and len(r.read(2048))==1024
+                  print('PODCAST_PUBLIC_OK',len(items),base+'feed.xml')
+                  break
+              except Exception as exc:
+                  if attempt==5: raise
+                  print('Waiting for Pages propagation',type(exc).__name__)
+                  time.sleep(5)
+          PY
