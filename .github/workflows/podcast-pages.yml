@@ -1,9 +1,6 @@
 name: TTActualidad - podcast piloto en GitHub Pages
 on:
   workflow_dispatch:
-  push:
-    branches: [main]
-    paths: ['.github/workflows/podcast-pages.yml','build_podcast.py']
 permissions:
   contents: read
   actions: read
