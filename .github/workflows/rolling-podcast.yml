@@ -1,6 +1,8 @@
 name: TTActualidad - actualización de podcast
 on:
   workflow_dispatch:
+  schedule:
+    - cron: '7,22,37,52 * * * *'
   push:
     branches: [main]
     paths: ['.github/workflows/rolling-podcast.yml','rolling_podcast.py','test_rolling_podcast.py']
@@ -62,14 +64,14 @@ jobs:
           path: audio-cache
           key: podcast-audio-v1-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Preparar publicación de cambios
-        if: steps.build.outputs.changed == 'yes' && github.event_name == 'workflow_dispatch'
+        if: steps.build.outputs.changed == 'yes' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.event.head_commit.message == 'Activar podcast continuo de tendencias cada quince minutos'))
         uses: actions/upload-pages-artifact@v3
         with:
           path: site
           retention-days: 1
   deploy:
     needs: build
-    if: needs.build.outputs.changed == 'yes' && github.event_name == 'workflow_dispatch'
+    if: needs.build.outputs.changed == 'yes' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule' || (github.event_name == 'push' && github.event.head_commit.message == 'Activar podcast continuo de tendencias cada quince minutos'))
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
