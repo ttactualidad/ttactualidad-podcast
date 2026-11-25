@@ -2,6 +2,7 @@
 The public GitHub snapshot only enriches the matching published revision.
 No D1 queries, Windows actions, publication in X, or private credentials.
 """
+import argparse
 import hashlib
 import json
 import re
@@ -151,7 +152,7 @@ def synthesize(row):
     if not 0<row["seconds"]<=1200 or not 1024<=row["bytes"]<=10_000_000: raise ValueError("Invalid new audio")
     return path
 
-def main():
+def plan():
     now=datetime.now(timezone.utc)
     # Read public feed first. Any outage aborts, never overwrites the live podcast.
     old,old_count=read_feed(get(BASE+"feed.xml",2_000_000),now,previous=True)
@@ -169,6 +170,15 @@ def main():
         print("PODCAST_UNCHANGED")
         Path("changed.txt").write_text("no")
         return
+    Path("plan.json").write_text(json.dumps({"old":old,"selected":selected},ensure_ascii=False),encoding="utf-8")
+    Path("changed.txt").write_text("yes")
+    print("PLAN_READY",len(old),"existing",len(selected),"new")
+
+
+def main():
+    if Path("changed.txt").read_text().strip()!="yes": return
+    data=json.loads(Path("plan.json").read_text(encoding="utf-8"))
+    old,selected=data["old"],data["selected"]
     # Public source only, and only if the source text matches the RSS item.
     dossiers={}
     if selected:
@@ -216,4 +226,9 @@ def main():
     print("ROLLING_READY",len(old),"episodes",long_count,"new long",total,"bytes")
 
 if __name__=="__main__":
-    main()
+    parser=argparse.ArgumentParser()
+    parser.add_argument("--plan",action="store_true")
+    parser.add_argument("--generate",action="store_true")
+    args=parser.parse_args()
+    if not args.generate: plan()
+    if not args.plan: main()
