@@ -1,0 +1,21 @@
+name: Podcast - pruebas aisladas de narración
+on:
+  pull_request:
+    paths: ['rolling_podcast.py', 'test_rolling_podcast.py', '.github/workflows/narration-ci.yml']
+  push:
+    branches: [feature/public-narration-only-20261128]
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m py_compile rolling_podcast.py test_rolling_podcast.py
+      - run: python -m unittest -v test_rolling_podcast.py
