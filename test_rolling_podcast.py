@@ -14,6 +14,22 @@ class PodcastTest(unittest.TestCase):
         self.assertNotIn("https",text)
         self.assertNotIn("Confianza",text)
         self.assertNotIn("+2",text)
+    def test_no_search_process_in_supplement(self):
+        brief="El club ha anunciado el fichaje del jugador."
+        p1="El club confirma que el jugador ha firmado un contrato de tres temporadas y publicó el anuncio en X."
+        p2="La etiqueta podría seguir circulando por los análisis posteriores, aunque no se ha podido determinar qué publicaciones concretas mantienen activa la conversación este sábado."
+        dossier=brief+"\n\nExplicación ampliada\n\n"+p1+"\n\nLa búsqueda directa en X devolvió un error HTTP 403.\nNo se han podido consultar publicaciones en X.\n\n"+p2+"\n\nFuentes consultadas"
+        text,long=spoken_text(brief,dossier)
+        self.assertTrue(long)
+        self.assertIn(p1,text)
+        self.assertIn("La etiqueta podría seguir circulando por los análisis posteriores.",text)
+        self.assertNotIn("403",text)
+        self.assertNotIn("no se ha podido",text)
+        self.assertNotIn("consultar publicaciones",text)
+    def test_clean_public_rss_does_not_repeat_cleaned_dossier(self):
+        brief="La etiqueta podría seguir circulando por los análisis posteriores."
+        dossier="Explicación ampliada\n\n"+brief+"\n\nLa búsqueda directa en X devolvió un error HTTP 403.\nFuentes consultadas"
+        self.assertEqual(spoken_text(brief,dossier),(brief,False))
     def test_mismatched_dossier(self):
         self.assertEqual(spoken_text("Un hecho distinto.", "Investigación y contraste\n\nTexto que no coincide."),("Un hecho distinto.",False))
     def test_missing_long(self):
