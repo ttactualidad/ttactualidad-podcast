@@ -56,6 +56,46 @@ def normalized(text):
 def heading(line):
     return re.sub(r"^[\s#>*_\-]+|[\s*_:]+$","",line).casefold()
 
+def is_research_process_comment(text):
+    """Do not narrate internal search diagnostics as news."""
+    return bool(re.search(
+        r"\b(?:X\s+(?:result[oó]|est[aá]|fue)\s+inaccesible"
+        r"|b[uú]squedas?\s+(?:directas?\s+|externas?\s+|realizadas?\s+)*"
+        r"(?:en\s+X\s+)?(?:no\s+(?:permitieron|arrojaron)|devolvi[oó]|devolvieron)"
+        r"\s+(?:un\s+error|error|resultados?\s+verificables?|recuperar|localizar|consultar)"
+        r"|(?:no\s+se\s+ha(?:n)?\s+podido|no\s+hemos\s+podido|no\s+he\s+podido|no\s+fue\s+posible)"
+        r"\s+(?:consultar|acceder|localizar|recuperar|leer|verificar|comprobar|determinar)"
+        r"\b[^.!?\n]{0,180}\b(?:X\b|publicaciones\b|posts\b|b[uú]squedas\b|volumen de menciones\b)"
+        r"|(?:tras|despu[eé]s de)\s+(?:realizar|hacer|efectuar)\s+(?:varias\s+)?b[uú]squedas)\b",
+        text, re.I))
+
+
+def clean_supplemental_narrative(text):
+    """Remove only unambiguous method comments, preserving factual caveats."""
+    kept = []
+    for sentence in re.split(r"(?<=[.!?])\s+(?=[A-ZÁÉÍÓÚÑ¿¡])", text):
+        if not is_research_process_comment(sentence):
+            kept.append(sentence)
+            continue
+        suffix = re.search(
+            r",\s*aunque\s+(?:no se ha podido|no hemos podido|no fue posible)\s+"
+            r"(?:determinar|consultar|verificar|comprobar|localizar|recuperar)\b[^.!?]*[.!?]?$",
+            sentence, re.I)
+        if suffix and re.search(r"\b(?:podr[íi]a[n]?|quiz[aá]s?|posiblemente|probablemente)\b",
+                                sentence[:suffix.start()], re.I):
+            prefix = sentence[:suffix.start()].strip() + "."
+            if not is_research_process_comment(prefix):
+                kept.append(prefix)
+                continue
+        if re.match(r"^(?:La[s]?\s+b[uú]squedas?|No se ha[n]? podido|No hemos podido|"
+                    r"No he podido|No fue posible|X (?:result[oó]|fue|est[aá]) inaccesible)\b",
+                    sentence, re.I):
+            continue
+        # Do not silently rewrite a mixed factual statement.
+        return ""
+    return " ".join(kept).strip()
+
+
 def spoken_text(brief,dossier):
     # Fail closed: the public short explanation must match the exact dossier,
     # not merely the title or the identity of a related news story.
@@ -80,7 +120,8 @@ def spoken_text(brief,dossier):
         line=re.sub(r"[*_]{1,3}","",line)
         # Source-only labels, citations and footer lines are not narration.
         if len(line)<35 or len(line.split())<6 or not re.search(r"[.!?;:]",line): continue
-        if normalized(line) in normalized(brief): continue
+        line=clean_supplemental_narrative(line)
+        if not line or normalized(line) in normalized(brief): continue
         research.append(line)
     extra=" ".join(research).strip()
     if len(extra)<60 or len(extra)>4500:
